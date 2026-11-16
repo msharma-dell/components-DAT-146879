@@ -9,7 +9,9 @@ import {
     VNode,
     watch,
     PropType,
-    toRefs
+    toRefs,
+    onMounted,
+    onBeforeUnmount
 } from 'vue-demi'
 import { DlCheckbox } from '../../essential'
 import { DlEmptyState } from '../../basic'
@@ -336,6 +338,27 @@ export default defineComponent({
             type: Boolean,
             default: true
         },
+        /**
+         * Enable infinite scroll - loads rows in chunks as user scrolls
+         */
+        infiniteScroll: {
+            type: Boolean,
+            default: false
+        },
+        /**
+         * Number of rows to load per page when infinite scroll is enabled
+         */
+        infiniteScrollPageSize: {
+            type: Number,
+            default: 30
+        },
+        /**
+         * Distance from bottom (in pixels) to trigger load more
+         */
+        infiniteScrollThreshold: {
+            type: Number,
+            default: 100
+        },
         ...useTableActionsProps,
         ...commonVirtScrollProps,
         ...useTableRowExpandProps,
@@ -371,6 +394,14 @@ export default defineComponent({
         const mainTableKey = ref(v4())
 
         const { rows: tableRows, columns: tableColumns } = toRefs(props)
+
+        // Infinite scroll state
+        const currentPage = ref(1)
+        const loadedRows = ref<DlTableRow[]>([])
+        const hasMore = ref(true)
+        const isLoadingMore = ref(false)
+        const scrollDebounceTimer = ref<number | null>(null)
+        const isInitialized = ref(false)
 
         const isDataEmpty = computed(() => !props.rows.length)
 
@@ -431,11 +462,24 @@ export default defineComponent({
             }
         )
 
-        const computedFilter = computed<DlTableRow[]>(() =>
-            props.filter && filteredRows.value.length
+        const computedFilter = computed<DlTableRow[]>(() => {
+            const baseRows = props.filter && filteredRows.value.length
                 ? filteredRows.value
                 : tableRows.value
-        )
+
+            // If infinite scroll is enabled, return loaded rows
+            if (props.infiniteScroll) {
+                console.log('[dl-tree-table] computedFilter returning loadedRows:', {
+                    totalBaseRows: baseRows.length,
+                    loadedRows: loadedRows.value.length,
+                    hasMore: hasMore.value,
+                    pageSize: props.infiniteScrollPageSize
+                })
+                return loadedRows.value
+            }
+
+            return baseRows
+        })
 
         const updateExpandedRow = (
             isExpanded: boolean,
@@ -818,10 +862,14 @@ export default defineComponent({
                     ...sortingMovement.value,
                     lastId: finalTarget?.id || sortingMovement.value.lastId
                 }
-                emit(
-                    'row-reorder',
-                    moveNestedRow(tableRows.value, event, smartSortingMovement)
-                )
+                // Always operate on full tableRows for drag-and-drop, even with infinite scroll
+                const reorderedRows = moveNestedRow(tableRows.value, event, smartSortingMovement)
+                emit('row-reorder', reorderedRows)
+                
+                // If infinite scroll is enabled, reset to reload with new order
+                if (props.infiniteScroll) {
+                    resetInfiniteScroll()
+                }
             } else {
                 mainTableKey.value = v4()
             }
@@ -1121,6 +1169,141 @@ export default defineComponent({
                 )
             )
 
+        // Infinite scroll methods
+        const loadMoreRows = () => {
+            if (!hasMore.value || isLoadingMore.value) {
+                return
+            }
+
+            isLoadingMore.value = true
+            emit('infinite-scroll-load', { currentPage: currentPage.value })
+
+            const baseRows = props.filter && filteredRows.value.length
+                ? filteredRows.value
+                : tableRows.value
+
+            const startIndex = currentPage.value * props.infiniteScrollPageSize
+            const endIndex = startIndex + props.infiniteScrollPageSize
+            const nextChunk = baseRows.slice(startIndex, endIndex)
+
+            loadedRows.value = [...loadedRows.value, ...nextChunk]
+            currentPage.value++
+
+            if (endIndex >= baseRows.length) {
+                hasMore.value = false
+            }
+
+            isLoadingMore.value = false
+        }
+
+        const handleScroll = (event: Event) => {
+            if (!props.infiniteScroll || !hasMore.value || isLoadingMore.value || !isInitialized.value) {
+                return
+            }
+
+            const target = event.target as HTMLElement
+            const scrollTop = target.scrollTop
+            const clientHeight = target.clientHeight
+            const scrollHeight = target.scrollHeight
+
+            // Only trigger if user has actually scrolled (scrollTop > 0)
+            if (scrollTop === 0) {
+                return
+            }
+
+            if (scrollTop + clientHeight >= scrollHeight - props.infiniteScrollThreshold) {
+                console.log('[dl-tree-table] Scroll threshold reached, loading more rows')
+                if (scrollDebounceTimer.value) {
+                    clearTimeout(scrollDebounceTimer.value)
+                }
+
+                scrollDebounceTimer.value = window.setTimeout(() => {
+                    loadMoreRows()
+                }, props.scrollDebounce)
+            }
+        }
+
+        const resetInfiniteScroll = () => {
+            currentPage.value = 1
+            hasMore.value = true
+            isLoadingMore.value = false
+            const baseRows = props.filter && filteredRows.value.length
+                ? filteredRows.value
+                : tableRows.value
+            // Slice preserves row objects including isExpanded state
+            loadedRows.value = baseRows.slice(0, props.infiniteScrollPageSize)
+            hasMore.value = baseRows.length > props.infiniteScrollPageSize
+            console.log('[dl-tree-table] resetInfiniteScroll:', {
+                totalRows: baseRows.length,
+                pageSize: props.infiniteScrollPageSize,
+                loadedRows: loadedRows.value.length,
+                hasMore: hasMore.value
+            })
+        }
+
+        // Watch for changes to rows to reset infinite scroll
+        watch([tableRows, () => props.filter], () => {
+            if (props.infiniteScroll) {
+                console.log('[dl-tree-table] Rows or filter changed, resetting infinite scroll')
+                resetInfiniteScroll()
+            }
+        })
+
+        // Attach scroll listener when component mounts
+        onMounted(() => {
+            if (props.infiniteScroll) {
+                // Wait for next tick to ensure dl-table is rendered
+                setTimeout(() => {
+                    const tableEl = dlTableRef.value?.$el
+                    if (tableEl) {
+                        // Find the scrollable element - try multiple selectors
+                        let scrollableElement = tableEl.querySelector('.q-table__container') ||
+                                                  tableEl.querySelector('.dl-table__container') ||
+                                                  tableEl.querySelector('.q-virtual-scroll__content') ||
+                                                  tableEl.querySelector('[class*="scroll"]')
+                        
+                        // Fallback: check if tableEl itself is scrollable
+                        if (!scrollableElement && (tableEl.scrollHeight > tableEl.clientHeight)) {
+                            scrollableElement = tableEl
+                        }
+                        
+                        if (scrollableElement) {
+                            console.log('[dl-tree-table] Attaching scroll listener to element:', scrollableElement.className || 'tableEl')
+                            scrollableElement.addEventListener('scroll', handleScroll)
+                        } else {
+                            console.warn('[dl-tree-table] Could not find scrollable element. Available children:', tableEl.children)
+                        }
+                    }
+                    // Initialize infinite scroll state after DOM is ready
+                    resetInfiniteScroll()
+                    // Mark as initialized after a short delay to ensure initial render is complete
+                    setTimeout(() => {
+                        isInitialized.value = true
+                        console.log('[dl-tree-table] Infinite scroll initialized')
+                    }, 200)
+                }, 100)
+            }
+        })
+
+        // Clean up scroll listener
+        onBeforeUnmount(() => {
+            if (props.infiniteScroll) {
+                const tableEl = dlTableRef.value?.$el
+                if (tableEl) {
+                    const scrollableElement = tableEl.querySelector('.q-table__container') ||
+                                              tableEl.querySelector('.dl-table__container') ||
+                                              tableEl.querySelector('.q-virtual-scroll__content') ||
+                                              tableEl.querySelector('[class*="scroll"]')
+                    if (scrollableElement) {
+                        scrollableElement.removeEventListener('scroll', handleScroll)
+                    }
+                }
+                if (scrollDebounceTimer.value) {
+                    clearTimeout(scrollDebounceTimer.value)
+                }
+            }
+        })
+
         const renderTBody = () => {
             if (isEmpty(tableRootRef.value)) return null
             const children = computedFilter.value.map((row, i) => {
@@ -1234,7 +1417,13 @@ export default defineComponent({
             containerClass,
             computedFilter,
             clearSelection,
-            clearSelectionWithRerender
+            clearSelectionWithRerender,
+            handleScroll,
+            loadMoreRows,
+            resetInfiniteScroll,
+            loadedRows,
+            hasMore,
+            isLoadingMore
         }
     },
     // adding ignore here as overloading the render function like this is not a known type

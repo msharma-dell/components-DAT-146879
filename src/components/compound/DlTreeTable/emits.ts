@@ -15,6 +15,7 @@ export const emits = [
     'row-hover-end',
     'row-expand',
     'row-collapse',
+    'infinite-scroll-load',
     ...useTableRowExpandEmits,
     ...useTreeTableRowSelectionEmits
 ]
