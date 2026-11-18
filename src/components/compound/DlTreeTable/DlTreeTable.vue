@@ -18,6 +18,7 @@ import { DlEmptyState } from '../../basic'
 import DlTable from '../DlTable/DlTable.vue'
 import DlTrTreeView from './views/DlTrTreeView.vue'
 import { DlTableColumn, DlTableProps, DlTableRow } from '../DlTable/types'
+import type { TablePagination } from '../DlTable/hooks/tablePagination'
 
 import { useTreeTableRowSelection } from './utils/treeTableRowSelection'
 import { useNestedTableFilter } from './hooks/nestedTableFilter'
@@ -156,6 +157,20 @@ export default defineComponent({
             default: false
         },
         /**
+         * Enable infinite scroll for the table. When true, pagination is disabled and all rows are rendered with scroll-based loading.
+         */
+        infiniteScroll: {
+            type: Boolean,
+            default: false
+        },
+        /**
+         * Pagination object to control table pagination
+         */
+        pagination: {
+            type: Object as PropType<TablePagination>,
+            default: null
+        },
+        /**
          * Hide table pagination
          */
         hidePagination: {
@@ -205,7 +220,7 @@ export default defineComponent({
             default: 'No data available'
         },
         /**
-         * Virtual scroll target
+         * Virtual scroll target %%%%
          */
         virtualScrollTarget: {
             type: Object as PropType<HTMLElement>,
@@ -303,13 +318,6 @@ export default defineComponent({
             default: ''
         },
         /**
-         * Scrolling delay
-         */
-        scrollDebounce: {
-            type: Number,
-            default: 100
-        },
-        /**
          * Disable child checkbox when parent is selected
          */
         disableChildCheckbox: {
@@ -338,27 +346,6 @@ export default defineComponent({
             type: Boolean,
             default: true
         },
-        /**
-         * Enable infinite scroll - loads rows in chunks as user scrolls
-         */
-        infiniteScroll: {
-            type: Boolean,
-            default: false
-        },
-        /**
-         * Number of rows to load per page when infinite scroll is enabled
-         */
-        infiniteScrollPageSize: {
-            type: Number,
-            default: 30
-        },
-        /**
-         * Distance from bottom (in pixels) to trigger load more
-         */
-        infiniteScrollThreshold: {
-            type: Number,
-            default: 100
-        },
         ...useTableActionsProps,
         ...commonVirtScrollProps,
         ...useTableRowExpandProps,
@@ -381,11 +368,33 @@ export default defineComponent({
         const storedValidTarget = ref<DlTableRow | null>(null)
 
         const vue2h = ref()
-
+        const manish = 'Sharma1'
+        console.log(manish)
         const sortingMovement = ref<SortingMovement>({
             lastId: null,
             direction: 'up'
         })
+
+        // Debug log for infiniteScroll prop changes
+        watch(
+            () => props.infiniteScroll,
+            (value) => {
+                console.log('[DlTreeTable] infiniteScroll prop:', value)
+            }
+        )
+
+        // Debug log when rows prop changes
+        watch(
+            () => props.rows,
+            (value) => {
+                console.log(
+                    '[DlTreeTable] rows prop changed, count:',
+                    value?.length,
+                    'hasNested:',
+                    hasFlatTreeData
+                )
+            }
+        )
 
         const uuid = `dl-tree-table-${v4()}`
 
@@ -394,14 +403,6 @@ export default defineComponent({
         const mainTableKey = ref(v4())
 
         const { rows: tableRows, columns: tableColumns } = toRefs(props)
-
-        // Infinite scroll state
-        const currentPage = ref(1)
-        const loadedRows = ref<DlTableRow[]>([])
-        const hasMore = ref(true)
-        const isLoadingMore = ref(false)
-        const scrollDebounceTimer = ref<number | null>(null)
-        const isInitialized = ref(false)
 
         const isDataEmpty = computed(() => !props.rows.length)
 
@@ -462,23 +463,170 @@ export default defineComponent({
             }
         )
 
-        const computedFilter = computed<DlTableRow[]>(() => {
-            const baseRows = props.filter && filteredRows.value.length
-                ? filteredRows.value
-                : tableRows.value
+        const computedFilter: any = computed<DlTableRow[]>(() => {
+            const result =
+                props.filter && filteredRows.value.length
+                    ? filteredRows.value
+                    : tableRows.value
+            console.log(
+                '[DlTreeTable] computedFilter (data passed to DlTable):',
+                result
+            )
+            console.log('[DlTreeTable] props.pagination:', props.pagination)
+            console.log(
+                '[DlTreeTable] props.infiniteScroll:',
+                props.infiniteScroll
+            )
+            console.log(
+                '[DlTreeTable] props.rowsPerPageOptions:',
+                props.rowsPerPageOptions
+            )
+            return result
+        })
 
-            // If infinite scroll is enabled, return loaded rows
-            if (props.infiniteScroll) {
-                console.log('[dl-tree-table] computedFilter returning loadedRows:', {
-                    totalBaseRows: baseRows.length,
-                    loadedRows: loadedRows.value.length,
-                    hasMore: hasMore.value,
-                    pageSize: props.infiniteScrollPageSize
-                })
-                return loadedRows.value
+        // Track sliding window for infinite scroll with buffers
+        const windowStartRow = ref(0)
+        const windowSize = ref(0)
+        const estimatedRowHeight = ref(40) // estimated row height in pixels
+
+        // When infiniteScroll is enabled, apply sliding window to computedFilter
+        // because DlTreeTable provides a custom tbody which disables DlTable's virtual scroll
+        const paginatedFilter = computed<DlTableRow[]>(() => {
+            if (!props.infiniteScroll || !props.pagination) {
+                return computedFilter.value
+            }
+            const pagination = props.pagination as any
+            const rowsPerPage = pagination?.rowsPerPage ?? 0
+            if (rowsPerPage === 0) {
+                return computedFilter.value
+            }
+            // Initialize window size to 3x rowsPerPage (visible + buffers)
+            if (windowSize.value === 0) {
+                windowSize.value = rowsPerPage * 3
+            }
+            console.log(
+                '[DlTreeTable] Applying sliding window - startRow:',
+                windowStartRow.value,
+                'windowSize:',
+                windowSize.value
+            )
+            const endRow = windowStartRow.value + windowSize.value
+            return computedFilter.value.slice(windowStartRow.value, endRow)
+        })
+
+        // Calculate spacer heights for scroll position preservation
+        const topSpacerHeight = computed(() => {
+            if (!props.infiniteScroll || !props.pagination) return 0
+            return windowStartRow.value * estimatedRowHeight.value
+        })
+
+        const bottomSpacerHeight = computed(() => {
+            if (!props.infiniteScroll || !props.pagination) return 0
+            const totalRows = computedFilter.value.length
+            const renderedRows = windowStartRow.value + windowSize.value
+            const remainingRows = Math.max(0, totalRows - renderedRows)
+            return remainingRows * estimatedRowHeight.value
+        })
+
+        // Handle scroll event with buffer-based loading
+        const handleScroll = (e: Event) => {
+            if (!props.infiniteScroll || !props.pagination) return
+
+            const target = e.target as HTMLElement
+            const { scrollTop, scrollHeight, clientHeight } = target
+            const pagination = props.pagination as any
+            const rowsPerPage = pagination?.rowsPerPage ?? 30
+            const bufferRows = rowsPerPage // buffer size
+
+            // Calculate visible row range
+            const firstVisibleRow = Math.floor(
+                scrollTop / estimatedRowHeight.value
+            )
+            const lastVisibleRow =
+                firstVisibleRow +
+                Math.ceil(clientHeight / estimatedRowHeight.value)
+
+            console.log(
+                '[DlTreeTable] Scroll - scrollTop:',
+                scrollTop,
+                'firstVisible:',
+                firstVisibleRow,
+                'lastVisible:',
+                lastVisibleRow,
+                'windowStart:',
+                windowStartRow.value,
+                'windowEnd:',
+                windowStartRow.value + windowSize.value
+            )
+
+            // Load more when approaching bottom of current window (buffer-based)
+            const rowsUntilBottom =
+                windowStartRow.value + windowSize.value - lastVisibleRow
+            if (
+                rowsUntilBottom < bufferRows &&
+                windowStartRow.value + windowSize.value <
+                    computedFilter.value.length
+            ) {
+                console.log(
+                    '[DlTreeTable] Buffer prefetch triggered - rowsUntilBottom:',
+                    rowsUntilBottom
+                )
+                // Shift window down by rowsPerPage to maintain buffer
+                windowStartRow.value += rowsPerPage
+                console.log(
+                    '[DlTreeTable] Window shifted down by',
+                    rowsPerPage,
+                    'rows, new start:',
+                    windowStartRow.value
+                )
             }
 
-            return baseRows
+            // Shift window up when scrolling near top
+            const rowsFromTop = firstVisibleRow - windowStartRow.value
+            if (rowsFromTop < bufferRows && windowStartRow.value > 0) {
+                console.log(
+                    '[DlTreeTable] Scroll near top - rowsFromTop:',
+                    rowsFromTop
+                )
+                const shiftAmount = Math.min(rowsPerPage, windowStartRow.value)
+                windowStartRow.value -= shiftAmount
+                console.log(
+                    '[DlTreeTable] Window shifted up by',
+                    shiftAmount,
+                    'rows, new start:',
+                    windowStartRow.value
+                )
+            }
+        }
+
+        // Legacy handlers for compatibility
+        const handleScrollToBottom = () => {
+            // Scroll is now handled by handleScroll with buffer-based loading
+        }
+
+        const handleScrollToTop = () => {
+            windowStartRow.value = 0
+        }
+
+        // Reset windowStartRow when data changes
+        watch(
+            () => props.rows,
+            () => {
+                console.log(
+                    '[DlTreeTable] props.rows changed, resetting windowStartRow'
+                )
+                windowStartRow.value = 0
+            }
+        )
+
+        // Debug: watch windowStartRow changes
+        watch(windowStartRow, (newVal, oldVal) => {
+            console.log(
+                '[DlTreeTable] windowStartRow changed from',
+                oldVal,
+                'to',
+                newVal
+            )
         })
 
         const updateExpandedRow = (
@@ -863,12 +1011,16 @@ export default defineComponent({
                     lastId: finalTarget?.id || sortingMovement.value.lastId
                 }
                 // Always operate on full tableRows for drag-and-drop, even with infinite scroll
-                const reorderedRows = moveNestedRow(tableRows.value, event, smartSortingMovement)
+                const reorderedRows = moveNestedRow(
+                    tableRows.value,
+                    event,
+                    smartSortingMovement
+                )
                 emit('row-reorder', reorderedRows)
-                
+
                 // If infinite scroll is enabled, reset to reload with new order
                 if (props.infiniteScroll) {
-                    resetInfiniteScroll()
+                    windowStartRow.value = 0
                 }
             } else {
                 mainTableKey.value = v4()
@@ -1169,160 +1321,41 @@ export default defineComponent({
                 )
             )
 
-        // Infinite scroll methods
-        const loadMoreRows = () => {
-            if (!hasMore.value || isLoadingMore.value) {
-                return
-            }
-
-            isLoadingMore.value = true
-            emit('infinite-scroll-load', { currentPage: currentPage.value })
-
-            const baseRows = props.filter && filteredRows.value.length
-                ? filteredRows.value
-                : tableRows.value
-
-            const startIndex = currentPage.value * props.infiniteScrollPageSize
-            const endIndex = startIndex + props.infiniteScrollPageSize
-            const nextChunk = baseRows.slice(startIndex, endIndex)
-
-            loadedRows.value = [...loadedRows.value, ...nextChunk]
-            currentPage.value++
-
-            if (endIndex >= baseRows.length) {
-                hasMore.value = false
-            }
-
-            isLoadingMore.value = false
-        }
-
-        const handleScroll = (event: Event) => {
-            if (!props.infiniteScroll || !hasMore.value || isLoadingMore.value || !isInitialized.value) {
-                return
-            }
-
-            const target = event.target as HTMLElement
-            const scrollTop = target.scrollTop
-            const clientHeight = target.clientHeight
-            const scrollHeight = target.scrollHeight
-
-            // Only trigger if user has actually scrolled (scrollTop > 0)
-            if (scrollTop === 0) {
-                return
-            }
-
-            if (scrollTop + clientHeight >= scrollHeight - props.infiniteScrollThreshold) {
-                console.log('[dl-tree-table] Scroll threshold reached, loading more rows')
-                if (scrollDebounceTimer.value) {
-                    clearTimeout(scrollDebounceTimer.value)
-                }
-
-                scrollDebounceTimer.value = window.setTimeout(() => {
-                    loadMoreRows()
-                }, props.scrollDebounce)
-            }
-        }
-
-        const resetInfiniteScroll = () => {
-            currentPage.value = 1
-            hasMore.value = true
-            isLoadingMore.value = false
-            const baseRows = props.filter && filteredRows.value.length
-                ? filteredRows.value
-                : tableRows.value
-            // Slice preserves row objects including isExpanded state
-            loadedRows.value = baseRows.slice(0, props.infiniteScrollPageSize)
-            hasMore.value = baseRows.length > props.infiniteScrollPageSize
-            console.log('[dl-tree-table] resetInfiniteScroll:', {
-                totalRows: baseRows.length,
-                pageSize: props.infiniteScrollPageSize,
-                loadedRows: loadedRows.value.length,
-                hasMore: hasMore.value
-            })
-        }
-
-        // Watch for changes to rows to reset infinite scroll
+        // Watch for changes to rows to reset sliding window
         watch([tableRows, () => props.filter], () => {
             if (props.infiniteScroll) {
-                console.log('[dl-tree-table] Rows or filter changed, resetting infinite scroll')
-                resetInfiniteScroll()
-            }
-        })
-
-        // Attach scroll listener when component mounts
-        onMounted(() => {
-            if (props.infiniteScroll) {
-                // Wait for next tick to ensure dl-table is rendered
-                setTimeout(() => {
-                    const tableEl = dlTableRef.value?.$el
-                    if (tableEl) {
-                        // Find the scrollable element - try multiple selectors
-                        let scrollableElement = tableEl.querySelector('.q-table__container') ||
-                                                  tableEl.querySelector('.dl-table__container') ||
-                                                  tableEl.querySelector('.q-virtual-scroll__content') ||
-                                                  tableEl.querySelector('[class*="scroll"]')
-                        
-                        // Fallback: check if tableEl itself is scrollable
-                        if (!scrollableElement && (tableEl.scrollHeight > tableEl.clientHeight)) {
-                            scrollableElement = tableEl
-                        }
-                        
-                        if (scrollableElement) {
-                            console.log('[dl-tree-table] Attaching scroll listener to element:', scrollableElement.className || 'tableEl')
-                            scrollableElement.addEventListener('scroll', handleScroll)
-                        } else {
-                            console.warn('[dl-tree-table] Could not find scrollable element. Available children:', tableEl.children)
-                        }
-                    }
-                    // Initialize infinite scroll state after DOM is ready
-                    resetInfiniteScroll()
-                    // Mark as initialized after a short delay to ensure initial render is complete
-                    setTimeout(() => {
-                        isInitialized.value = true
-                        console.log('[dl-tree-table] Infinite scroll initialized')
-                    }, 200)
-                }, 100)
-            }
-        })
-
-        // Clean up scroll listener
-        onBeforeUnmount(() => {
-            if (props.infiniteScroll) {
-                const tableEl = dlTableRef.value?.$el
-                if (tableEl) {
-                    const scrollableElement = tableEl.querySelector('.q-table__container') ||
-                                              tableEl.querySelector('.dl-table__container') ||
-                                              tableEl.querySelector('.q-virtual-scroll__content') ||
-                                              tableEl.querySelector('[class*="scroll"]')
-                    if (scrollableElement) {
-                        scrollableElement.removeEventListener('scroll', handleScroll)
-                    }
-                }
-                if (scrollDebounceTimer.value) {
-                    clearTimeout(scrollDebounceTimer.value)
-                }
+                console.log(
+                    '[DlTreeTable] Rows or filter changed, resetting windowStartRow'
+                )
+                windowStartRow.value = 0
             }
         })
 
         const renderTBody = () => {
+            console.log(
+                '[DlTreeTable] renderTBody called, rows count:',
+                paginatedFilter.value?.length
+            )
             if (isEmpty(tableRootRef.value)) return null
-            const children = computedFilter.value.map((row, i) => {
-                const rowBodySlot = slots['row-body']
-                const [renderRow] = rowBodySlot
-                    ? rowBodySlot({ row })
-                    : [renderTr(row, i)]
-                const actualLevel = calculateRowLevel(row)
-                return renderComponent(
-                    vue2h.value,
-                    'tbody',
-                    {
-                        'data-level': actualLevel,
-                        key: getRowKey.value(row) + i,
-                        class: 'nested-tbody'
-                    },
-                    isVue2 ? [renderRow] : renderRow
-                )
-            })
+            const children = paginatedFilter.value.map(
+                (row: DlTableRow, i: number) => {
+                    const rowBodySlot = slots['row-body']
+                    const [renderRow] = rowBodySlot
+                        ? rowBodySlot({ row })
+                        : [renderTr(row, i)]
+                    const actualLevel = calculateRowLevel(row)
+                    return renderComponent(
+                        vue2h.value,
+                        'tbody',
+                        {
+                            'data-level': actualLevel,
+                            key: getRowKey.value(row) + i,
+                            class: 'nested-tbody'
+                        },
+                        isVue2 ? [renderRow] : renderRow
+                    )
+                }
+            )
 
             const tableBody = renderComponent(
                 vue2h.value,
@@ -1416,19 +1449,24 @@ export default defineComponent({
             vue2h,
             containerClass,
             computedFilter,
-            clearSelection,
-            clearSelectionWithRerender,
+            paginatedFilter,
             handleScroll,
-            loadMoreRows,
-            resetInfiniteScroll,
-            loadedRows,
-            hasMore,
-            isLoadingMore
+            handleScrollToBottom,
+            handleScrollToTop,
+            topSpacerHeight,
+            bottomSpacerHeight,
+            clearSelection,
+            clearSelectionWithRerender
         }
     },
     // adding ignore here as overloading the render function like this is not a known type
     // @ts-ignore
     render(vue2h: any) {
+        console.log('[DlTreeTable] RENDER FUNCTION CALLED')
+        console.log(
+            '[DlTreeTable]   this.paginatedFilter length:',
+            (this.paginatedFilter as DlTableRow[])?.length
+        )
         this.vue2h = vue2h
         const tableBodySlot = isVue2
             ? this.$slots['table-body'] &&
@@ -1436,7 +1474,31 @@ export default defineComponent({
             : this.$slots['table-body']
         const tbody =
             tableBodySlot ?? (this.isDataEmpty ? null : this.renderTBody)
-        return renderComponent(vue2h, DlTable, {
+
+        // Debug log before render
+        console.log(
+            '[DlTreeTable] Rendering DlTable with infiniteScroll:',
+            this.infiniteScroll,
+            'pagination:',
+            this.pagination
+        )
+        console.log('[DlTreeTable] Render props being passed to DlTable:')
+        console.log('[DlTreeTable]   - infiniteScroll:', this.infiniteScroll)
+        console.log('[DlTreeTable]   - pagination:', this.pagination)
+        console.log(
+            '[DlTreeTable]   - rowsPerPageOptions:',
+            this.rowsPerPageOptions
+        )
+        console.log(
+            '[DlTreeTable]   - computedFilter length:',
+            (this.computedFilter as DlTableRow[])?.length
+        )
+        console.log(
+            '[DlTreeTable]   - paginatedFilter length:',
+            (this.paginatedFilter as DlTableRow[])?.length
+        )
+
+        const tableComponent = renderComponent(vue2h, DlTable, {
             ref: 'dlTableRef',
             draggable: this.draggable,
             id: this.uuid,
@@ -1449,12 +1511,13 @@ export default defineComponent({
             isTreeTable: true,
             selection: this.selection,
             loading: this.loading,
-            rows: this.computedFilter,
+            rows: this.paginatedFilter,
             resizable: this.resizable,
             rowKey: this.rowKey,
             color: this.color,
             title: this.title,
             virtualScroll: this.virtualScroll,
+            infiniteScroll: this.infiniteScroll,
             rowsPerPageOptions: this.rowsPerPageOptions,
             hidePagination: this.hidePagination,
             isEmpty: this.isDataEmpty,
@@ -1475,6 +1538,9 @@ export default defineComponent({
                 'row-dblclick': this.emitRowDblclick,
                 'update:selected': this.updateSelected,
                 'col-update': this.updateColumns
+                // Note: scroll-to-bottom and scroll-to-top events from DlTable won't fire
+                // because custom tbody disables virtual scroll. We handle scroll detection
+                // directly in the wrapper div when infiniteScroll is enabled.
             },
             scopedSlots: {
                 tbody,
@@ -1483,6 +1549,44 @@ export default defineComponent({
                     : undefined
             }
         })
+
+        // Wrap in scrollable div for infinite scroll detection
+        // DlTable's scroll events don't fire when custom tbody disables virtual scroll
+        if (this.infiniteScroll) {
+            return vue2h(
+                'div',
+                {
+                    on: {
+                        scroll: (this as any).handleScroll
+                    },
+                    style: {
+                        maxHeight: '500px',
+                        overflowY: 'auto',
+                        position: 'relative'
+                    }
+                },
+                [
+                    // Top spacer to maintain scroll position (preserves scroll anchor)
+                    vue2h('div', {
+                        style: {
+                            height: (this as any).topSpacerHeight + 'px',
+                            pointerEvents: 'none'
+                        }
+                    }),
+                    // Table component
+                    tableComponent,
+                    // Bottom spacer to maintain scroll position
+                    vue2h('div', {
+                        style: {
+                            height: (this as any).bottomSpacerHeight + 'px',
+                            pointerEvents: 'none'
+                        }
+                    })
+                ]
+            )
+        }
+
+        return tableComponent
     }
 })
 </script>

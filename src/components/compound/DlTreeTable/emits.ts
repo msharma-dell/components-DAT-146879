@@ -4,6 +4,8 @@ import { useTreeTableRowSelectionEmits } from './utils/treeTableRowSelection'
 export const emits = [
     'request',
     'virtual-scroll',
+    'scroll-to-bottom',
+    'scroll-to-top',
     'row-reorder',
     'col-update',
     'row-click',

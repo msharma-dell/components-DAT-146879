@@ -1682,7 +1682,35 @@ export default defineComponent({
         )
 
         const computedRows = computed(() => {
-            if (props.infiniteScroll) return filteredSortedRows.value
+            console.log('[DlTable] computedRows called')
+            console.log(
+                '[DlTable]   props.infiniteScroll:',
+                props.infiniteScroll
+            )
+            console.log(
+                '[DlTable]   computedPagination:',
+                computedPagination.value
+            )
+            console.log(
+                '[DlTable]   filteredSortedRows length:',
+                filteredSortedRows.value.length
+            )
+            console.log(
+                '[DlTable]   hasExpandableSlot:',
+                hasExpandableSlot.value
+            )
+            console.log('[DlTable]   hasVirtScroll:', hasVirtScroll.value)
+
+            if (props.infiniteScroll) {
+                console.log(
+                    '[DlTable] infiniteScroll is true, returning all rows:',
+                    filteredSortedRows.value.length
+                )
+                console.log(
+                    '[DlTable]   NOTE: infiniteScroll relies on virtual scroll to limit rendering. Custom tbody slot disables virtual scroll.'
+                )
+                return filteredSortedRows.value
+            }
             let filtered = filteredSortedRows.value
 
             const { rowsPerPage } = computedPagination.value
@@ -1704,6 +1732,7 @@ export default defineComponent({
                 }
             }
 
+            console.log('[DlTable] Returning filtered rows:', filtered.length)
             return filtered
         })
 
