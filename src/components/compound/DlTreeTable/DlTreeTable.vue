@@ -21,6 +21,8 @@ import { useTreeTableRowSelection } from './utils/treeTableRowSelection'
 import { useNestedTableFilter } from './hooks/nestedTableFilter'
 import { getFromChildren } from './utils/getFromChildren'
 import { emits } from './emits'
+import { flattenTree } from './utils/flattenTree'
+import { normalizeDataToColumns } from './utils/normalizeDataToColumns'
 import Sortable from '../DlTable/components/SortableJS.vue'
 import { renderComponent } from '../../../utils/render-fn'
 import { isEmpty } from 'lodash'
@@ -369,6 +371,7 @@ export default defineComponent({
         const mainTbodyUuid = `dl-tree-table-tbody-${v4()}`
 
         const mainTableKey = ref(v4())
+        const virtualScrollKey = ref(0)
 
         const { rows: tableRows, columns: tableColumns } = toRefs(props)
 
@@ -431,11 +434,30 @@ export default defineComponent({
             }
         )
 
-        const computedFilter = computed<DlTableRow[]>(() =>
-            props.filter && filteredRows.value.length
-                ? filteredRows.value
-                : tableRows.value
-        )
+        const computedFilter = computed<DlTableRow[]>(() => {
+            const baseRows =
+                props.filter && filteredRows.value.length
+                    ? filteredRows.value
+                    : tableRows.value
+            // Normalize data to match column field names
+            return normalizeDataToColumns(
+                baseRows,
+                tableColumns.value as DlTableColumn[]
+            )
+        })
+
+        // Flatten tree structure for virtual scroll
+        const flattenedRows = computed(() => {
+            if (!props.virtualScroll) {
+                return computedFilter.value
+            }
+            const flattened = flattenTree(computedFilter.value)
+            // Normalize data to match column field names
+            return normalizeDataToColumns(
+                flattened,
+                tableColumns.value as DlTableColumn[]
+            )
+        })
 
         const updateExpandedRow = (
             isExpanded: boolean,
@@ -450,6 +472,11 @@ export default defineComponent({
                         row.isExpanded = isExpanded
                     }
                     updateNestedRows(row, isExpanded)
+
+                    // Trigger virtual scroll re-render when expansion changes
+                    if (props.virtualScroll) {
+                        virtualScrollKey.value++
+                    }
 
                     const eventData: RowExpandEventData = {
                         row,
@@ -824,6 +851,7 @@ export default defineComponent({
                 )
             } else {
                 mainTableKey.value = v4()
+                virtualScrollKey.value++
             }
             draggedRow.value = null
             targetRow.value = null
@@ -1123,6 +1151,13 @@ export default defineComponent({
 
         const renderTBody = () => {
             if (isEmpty(tableRootRef.value)) return null
+
+            // When virtual scroll is enabled, don't provide custom tbody - let DlTable handle it
+            if (props.virtualScroll) {
+                return null
+            }
+
+            // Original nested structure for non-virtual scroll
             const children = computedFilter.value.map((row, i) => {
                 const rowBodySlot = slots['row-body']
                 const [renderRow] = rowBodySlot
@@ -1154,7 +1189,10 @@ export default defineComponent({
                     renderComponent(
                         vue2h.value,
                         'td',
-                        { colspan: tableRootRef.value.computedColspan },
+                        {
+                            colspan: tableRootRef.value.computedColspan,
+                            style: 'padding: 0'
+                        },
                         renderComponent(
                             vue2h.value,
                             Sortable,
@@ -1164,6 +1202,7 @@ export default defineComponent({
                                 tag: 'table',
                                 id: mainTbodyUuid,
                                 key: mainTableKey.value,
+                                class: 'nested-table',
                                 isSortable: hasDraggableRows.value,
                                 onEnd: handleEndEvent,
                                 onChange: handleChangeEvent,
@@ -1173,7 +1212,6 @@ export default defineComponent({
                                     change: handleChangeEvent,
                                     start: handleStartEvent
                                 },
-                                class: 'nested-table',
                                 options: {
                                     group: 'nested',
                                     animation: 150,
@@ -1227,12 +1265,19 @@ export default defineComponent({
             hasSlotByName,
             getSlotByName,
             renderTBody,
+            renderDlTrTree,
+            handleStartEvent,
+            handleChangeEvent,
+            handleMoveEvent,
+            handleEndEvent,
             tableRootRef,
             uuid,
             mainTbodyUuid,
             vue2h,
             containerClass,
             computedFilter,
+            flattenedRows,
+            virtualScrollKey,
             clearSelection,
             clearSelectionWithRerender
         }
@@ -1245,12 +1290,26 @@ export default defineComponent({
             ? this.$slots['table-body'] &&
               (() => (this.$slots['table-body'] as any)?.pop())
             : this.$slots['table-body']
-        const tbody =
-            tableBodySlot ?? (this.isDataEmpty ? null : this.renderTBody)
+
+        // When virtual scroll is enabled, don't provide table-body slot to let DlTable handle virtualization
+        const tbody = this.virtualScroll
+            ? null
+            : tableBodySlot ?? (this.isDataEmpty ? null : this.renderTBody)
+
+        const sourceSlots: Record<string, any> =
+            (isVue2 ? (this as any).$scopedSlots : this.$slots) || {}
+        const forwardedSlots: Record<string, any> = {}
+        if (this.virtualScroll) {
+            Object.keys(sourceSlots)
+                .filter((name) => /^(body|header)-cell/.test(name))
+                .forEach((name) => (forwardedSlots[name] = sourceSlots[name]))
+        }
+
         return renderComponent(vue2h, DlTable, {
             ref: 'dlTableRef',
             draggable: this.draggable,
             id: this.uuid,
+            key: this.virtualScroll ? this.virtualScrollKey : undefined,
             selected: this.selectedData,
             separator: this.separator,
             columns: this.tableColumns,
@@ -1260,12 +1319,21 @@ export default defineComponent({
             isTreeTable: true,
             selection: this.selection,
             loading: this.loading,
-            rows: this.computedFilter,
+            rows: this.virtualScroll ? this.flattenedRows : this.computedFilter,
             resizable: this.resizable,
             rowKey: this.rowKey,
             color: this.color,
             title: this.title,
             virtualScroll: this.virtualScroll,
+            virtualScrollSliceSize: this.virtualScrollSliceSize,
+            virtualScrollSliceRatioBefore: this.virtualScrollSliceRatioBefore,
+            virtualScrollSliceRatioAfter: this.virtualScrollSliceRatioAfter,
+            virtualScrollItemSize: this.virtualScrollItemSize,
+            virtualScrollStickySizeStart: this.virtualScrollStickySizeStart,
+            virtualScrollStickySizeEnd: this.virtualScrollStickySizeEnd,
+            tableColspan: this.tableColspan,
+            virtualScrollTarget: this.virtualScrollTarget,
+            scrollDebounce: this.scrollDebounce,
             rowsPerPageOptions: this.rowsPerPageOptions,
             hidePagination: this.hidePagination,
             isEmpty: this.isDataEmpty,
@@ -1285,9 +1353,30 @@ export default defineComponent({
                 'row-click': this.emitRowClick,
                 'row-dblclick': this.emitRowDblclick,
                 'update:selected': this.updateSelected,
-                'col-update': this.updateColumns
+                'col-update': this.updateColumns,
+                'tree-toggle-expand': (row: DlTableRow) =>
+                    (this as any).updateExpandedRow(
+                        !row.isExpanded,
+                        (this as any).getRowKey(row)
+                    ),
+                'row-hover-start': (...args: any[]) =>
+                    this.$emit('row-hover-start', ...args),
+                'row-hover-end': (...args: any[]) =>
+                    this.$emit('row-hover-end', ...args)
             },
+            customIconExpandedRow: this.customIconExpandedRow,
+            customIconCompressedRow: this.customIconCompressedRow,
+            chevronIconColor: this.chevronIconColor,
+            treeSortableHandlers: this.virtualScroll
+                ? {
+                      start: this.handleStartEvent,
+                      change: this.handleChangeEvent,
+                      move: this.handleMoveEvent,
+                      end: this.handleEndEvent
+                  }
+                : null,
             scopedSlots: {
+                ...forwardedSlots,
                 tbody,
                 'no-data': this.$slots['no-data']
                     ? () => this.$slots['no-data']
@@ -1317,6 +1406,21 @@ table {
     table-layout: fixed;
     border-collapse: collapse;
     border-spacing: 0;
+}
+
+.nested-table {
+    width: 100%;
+    table-layout: fixed;
+    border-collapse: collapse;
+    border-spacing: 0;
+}
+
+.nested-tbody {
+    width: 100%;
+}
+
+.nested-element {
+    width: 100%;
 }
 
 tbody {

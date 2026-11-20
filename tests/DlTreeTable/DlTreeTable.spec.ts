@@ -110,6 +110,15 @@ describe('DlTreeTable', () => {
                     NO_RESULTS_LABEL
                 )
             })
+            it('should enable virtual scroll for TreeTable with flattened data', async () => {
+                await wrapper.setProps({
+                    virtualScroll: true
+                })
+
+                expect(wrapper.vm.dlTableRef.hasVirtScroll).toBe(true)
+                expect(wrapper.vm.flattenedRows).toBeDefined()
+                expect(wrapper.vm.flattenedRows.length).toBeGreaterThan(0)
+            })
         })
     })
 })

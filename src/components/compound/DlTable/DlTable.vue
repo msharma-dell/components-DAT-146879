@@ -60,15 +60,14 @@
                     >
                         <DlTr>
                             <th
-                                v-if="isTreeTable"
-                                class="dl-table--col-auto-width empty-col"
-                                :data-resizable="false"
-                                style="width: 25px"
-                                @mousedown="stopAndPrevent"
-                            />
-                            <th
                                 v-if="hasDraggableRows && !isTreeTable"
                                 class="dl-table--col-auto-width dl-table__drag-icon"
+                                style="width: 25px"
+                            />
+                            <th
+                                v-if="isTreeTable"
+                                class="dl-table--col-auto-width"
+                                :data-resizable="false"
                                 style="width: 25px"
                             />
                             <th
@@ -99,7 +98,7 @@
                             </th>
 
                             <th
-                                v-if="expandableRows"
+                                v-if="expandableRows && !isTreeTable"
                                 style="width: 26px"
                                 class="dl-table--col-auto-width dl-table--col-icon-wrapper"
                             />
@@ -267,161 +266,363 @@
                             :has-any-action="hasAnyAction"
                             name="row-body"
                         >
-                            <DlTr
-                                :key="getRowKey(props.item)"
-                                :class="
-                                    isRowSelected(getRowKey(props.item))
-                                        ? 'selected'
-                                        : hasAnyAction
-                                            ? ' cursor-pointer'
-                                            : ''
-                                "
-                                :no-hover="noHover"
-                                @click="
-                                    onTrClick(
-                                        $event,
-                                        props.item,
-                                        props.pageIndex
-                                    )
-                                "
-                                @dblclick="
-                                    onTrDblClick(
-                                        $event,
-                                        props.item,
-                                        props.pageIndex
-                                    )
-                                "
-                                @contextmenu="
-                                    onTrContextMenu(
-                                        $event,
-                                        props.item,
-                                        props.pageIndex
-                                    )
-                                "
-                            >
-                                <td
-                                    v-if="hasDraggableRows && !isTreeTable"
-                                    class="dl-table__drag-icon"
+                            <!-- For TreeTable with virtual scroll, render tree structure directly -->
+                            <template v-if="isTreeTable">
+                                <DlTr
+                                    :key="getRowKey(props.item)"
+                                    :data-level="props.item.level"
+                                    :data-id="props.item.id"
+                                    :data-children="
+                                        (props.item.children || []).length
+                                    "
+                                    :data-is-visible="props.item.isVisible"
+                                    :class="[
+                                        'nested-element',
+                                        isRowSelected(getRowKey(props.item))
+                                            ? 'selected'
+                                            : hasAnyAction
+                                                ? ' cursor-pointer'
+                                                : ''
+                                    ]"
+                                    :no-hover="noHover"
+                                    @mouseenter="
+                                        $emit(
+                                            'row-hover-start',
+                                            $event,
+                                            treeRow(props.item)
+                                        )
+                                    "
+                                    @mouseleave="
+                                        $emit(
+                                            'row-hover-end',
+                                            $event,
+                                            treeRow(props.item)
+                                        )
+                                    "
+                                    @click="
+                                        onTrClick(
+                                            $event,
+                                            treeRow(props.item),
+                                            props.pageIndex
+                                        )
+                                    "
+                                    @dblclick="
+                                        onTrDblClick(
+                                            $event,
+                                            treeRow(props.item),
+                                            props.pageIndex
+                                        )
+                                    "
+                                    @contextmenu="
+                                        onTrContextMenu(
+                                            $event,
+                                            treeRow(props.item),
+                                            props.pageIndex
+                                        )
+                                    "
                                 >
-                                    <dl-icon
-                                        class="draggable-icon"
-                                        icon="icon-dl-drag"
-                                        size="12px"
-                                    />
-                                </td>
-                                <td
-                                    v-if="hasSelectionMode"
-                                    class="dl-table--col-auto-width"
-                                >
-                                    <slot
-                                        name="body-selection"
-                                        v-bind="
-                                            getBodySelectionScope({
-                                                key: getRowKey(props.item),
-                                                row: props.item,
-                                                pageIndex: props.pageIndex
-                                            })
-                                        "
-                                    >
-                                        <DlCheckbox
-                                            :color="checkboxColor"
-                                            :model-value="
-                                                isRowSelected(
-                                                    getRowKey(props.item)
-                                                )
+                                    <td class="dl-draggable-container">
+                                        <dl-icon
+                                            v-if="
+                                                hasDraggableRows &&
+                                                    !props.item.disableDraggable
                                             "
-                                            @update:model-value="
-                                                (adding, evt) =>
-                                                    updateSelection(
-                                                        [getRowKey(props.item)],
-                                                        [props.item],
-                                                        adding,
-                                                        evt
+                                            class="draggable-icon"
+                                            icon="icon-dl-drag"
+                                            size="12px"
+                                        />
+                                    </td>
+                                    <td
+                                        v-if="hasSelectionMode"
+                                        class="dl-table--col-auto-width"
+                                    >
+                                        <slot
+                                            name="body-selection"
+                                            v-bind="
+                                                getBodySelectionScope({
+                                                    key: getRowKey(props.item),
+                                                    row: treeRow(props.item),
+                                                    pageIndex: props.pageIndex
+                                                })
+                                            "
+                                        >
+                                            <DlCheckbox
+                                                :color="checkboxColor"
+                                                :model-value="
+                                                    isRowSelected(
+                                                        getRowKey(props.item)
                                                     )
+                                                "
+                                                @update:model-value="
+                                                    (adding, evt) =>
+                                                        updateSelection(
+                                                            [
+                                                                getRowKey(
+                                                                    props.item
+                                                                )
+                                                            ],
+                                                            [
+                                                                treeRow(
+                                                                    props.item
+                                                                )
+                                                            ],
+                                                            adding,
+                                                            evt
+                                                        )
+                                                "
+                                            />
+                                        </slot>
+                                    </td>
+                                    <td
+                                        class="chevron-icon-container"
+                                        :class="{
+                                            'no-children':
+                                                (props.item.children || [])
+                                                    .length === 0
+                                        }"
+                                    >
+                                        <div
+                                            class="chevron-icon"
+                                            :class="{
+                                                'no-children':
+                                                    (props.item.children || [])
+                                                        .length === 0
+                                            }"
+                                        >
+                                            <DlIcon
+                                                v-if="
+                                                    (props.item.children || [])
+                                                        .length > 0
+                                                "
+                                                :icon="
+                                                    props.item.isExpanded
+                                                        ? customIconExpandedRow ||
+                                                            'icon-dl-down-chevron'
+                                                        : customIconCompressedRow ||
+                                                            'icon-dl-right-chevron'
+                                                "
+                                                size="12px"
+                                                :color="
+                                                    chevronIconColor ||
+                                                        undefined
+                                                "
+                                                @click.stop.prevent="
+                                                    $emit(
+                                                        'tree-toggle-expand',
+                                                        treeRow(props.item)
+                                                    )
+                                                "
+                                            />
+                                        </div>
+                                    </td>
+                                    <DlTd
+                                        v-for="(col, colIndex) in computedCols"
+                                        :key="col.name"
+                                        :class="[
+                                            col.tdClass(props.item),
+                                            'dl-td-tree'
+                                        ]"
+                                        :style="`${col.tdStyle(
+                                            props.item
+                                        )}padding-left: ${
+                                            colIndex === 0
+                                                ? ((props.item.level || 1) -
+                                                    1) *
+                                                    16 +
+                                                    1
+                                                : 1
+                                        }px;`"
+                                        :no-hover="noHover"
+                                        :col-index="colIndex"
+                                        :no-tooltip="col.ignoreTooltip"
+                                        :padding="`0 ${columnSpacing}`"
+                                    >
+                                        <slot
+                                            v-bind="
+                                                getBodyCellScope({
+                                                    key: getRowKey(props.item),
+                                                    row: treeRow(props.item),
+                                                    pageIndex: props.pageIndex,
+                                                    col
+                                                })
+                                            "
+                                            :name="
+                                                hasSlotByName(
+                                                    `body-cell-${col.name}`
+                                                )
+                                                    ? `body-cell-${col.name}`
+                                                    : 'body-cell'
+                                            "
+                                        >
+                                            {{ getCellValue(col, props.item) }}
+                                        </slot>
+                                    </DlTd>
+                                </DlTr>
+                            </template>
+                            <!-- Regular table row for non-TreeTable -->
+                            <template v-else>
+                                <DlTr
+                                    :key="getRowKey(props.item)"
+                                    :class="
+                                        isRowSelected(getRowKey(props.item))
+                                            ? 'selected'
+                                            : hasAnyAction
+                                                ? ' cursor-pointer'
+                                                : ''
+                                    "
+                                    :no-hover="noHover"
+                                    @click="
+                                        onTrClick(
+                                            $event,
+                                            props.item,
+                                            props.pageIndex
+                                        )
+                                    "
+                                    @dblclick="
+                                        onTrDblClick(
+                                            $event,
+                                            props.item,
+                                            props.pageIndex
+                                        )
+                                    "
+                                    @contextmenu="
+                                        onTrContextMenu(
+                                            $event,
+                                            props.item,
+                                            props.pageIndex
+                                        )
+                                    "
+                                >
+                                    <td
+                                        v-if="hasDraggableRows && !isTreeTable"
+                                        class="dl-table__drag-icon"
+                                    >
+                                        <dl-icon
+                                            class="draggable-icon"
+                                            icon="icon-dl-drag"
+                                            size="12px"
+                                        />
+                                    </td>
+                                    <td
+                                        v-if="hasSelectionMode"
+                                        class="dl-table--col-auto-width"
+                                    >
+                                        <slot
+                                            name="body-selection"
+                                            v-bind="
+                                                getBodySelectionScope({
+                                                    key: getRowKey(props.item),
+                                                    row: props.item,
+                                                    pageIndex: props.pageIndex
+                                                })
+                                            "
+                                        >
+                                            <DlCheckbox
+                                                :color="checkboxColor"
+                                                :model-value="
+                                                    isRowSelected(
+                                                        getRowKey(props.item)
+                                                    )
+                                                "
+                                                @update:model-value="
+                                                    (adding, evt) =>
+                                                        updateSelection(
+                                                            [
+                                                                getRowKey(
+                                                                    props.item
+                                                                )
+                                                            ],
+                                                            [props.item],
+                                                            adding,
+                                                            evt
+                                                        )
+                                                "
+                                            />
+                                        </slot>
+                                    </td>
+                                    <td v-if="expandableRows">
+                                        <dl-icon
+                                            :icon="
+                                                getRowExpandedIcon(props.item)
+                                            "
+                                            @click.stop.prevent="
+                                                updateExpanded(props.item)
                                             "
                                         />
-                                    </slot>
-                                </td>
-                                <td v-if="expandableRows">
-                                    <dl-icon
-                                        :icon="getRowExpandedIcon(props.item)"
-                                        @click.stop.prevent="
-                                            updateExpanded(props.item)
-                                        "
-                                    />
-                                </td>
-                                <DlTd
-                                    v-for="(col, colIndex) in computedCols"
-                                    :key="col.name"
-                                    :class="col.tdClass(props.item)"
-                                    :style="col.tdStyle(props.item)"
-                                    :no-hover="noHover"
-                                    :col-index="colIndex"
-                                    :no-tooltip="col.ignoreTooltip"
-                                    :padding="`0 ${columnSpacing}`"
+                                    </td>
+                                    <DlTd
+                                        v-for="(col, colIndex) in computedCols"
+                                        :key="col.name"
+                                        :class="col.tdClass(props.item)"
+                                        :style="col.tdStyle(props.item)"
+                                        :no-hover="noHover"
+                                        :col-index="colIndex"
+                                        :no-tooltip="col.ignoreTooltip"
+                                        :padding="`0 ${columnSpacing}`"
+                                    >
+                                        <slot
+                                            v-bind="
+                                                getBodyCellScope({
+                                                    key: getRowKey(props.item),
+                                                    row: props.item,
+                                                    pageIndex: props.pageIndex,
+                                                    col
+                                                })
+                                            "
+                                            :name="
+                                                hasSlotByName(
+                                                    `body-cell-${col.name}`
+                                                )
+                                                    ? `body-cell-${col.name}`
+                                                    : 'body-cell'
+                                            "
+                                        >
+                                            {{ getCellValue(col, props.item) }}
+                                        </slot>
+                                    </DlTd>
+                                    <DlTd
+                                        v-if="showRowActions"
+                                        key="visibleColumnsSlot"
+                                        class="visible-columns-justify-end dl-table-visible-column"
+                                        no-tooltip
+                                    >
+                                        <slot
+                                            v-bind="
+                                                getBodyCellScope({
+                                                    key: getRowKey(props.item),
+                                                    row: props.item,
+                                                    pageIndex: props.pageIndex
+                                                })
+                                            "
+                                            :name="
+                                                hasSlotByName(
+                                                    `body-cell-row-actions`
+                                                )
+                                                    ? `body-cell-row-actions`
+                                                    : 'body-cell'
+                                            "
+                                        >
+                                            <div style="width: 15px"></div>
+                                        </slot>
+                                    </DlTd>
+                                </DlTr>
+                                <tr
+                                    v-if="isRowExpanded(props.item)"
+                                    :key="getRowExpandedKey(props.item)"
+                                    class="dl-virtual-scroll--with-prev"
                                 >
-                                    <slot
-                                        v-bind="
-                                            getBodyCellScope({
-                                                key: getRowKey(props.item),
-                                                row: props.item,
-                                                pageIndex: props.pageIndex,
-                                                col
-                                            })
-                                        "
-                                        :name="
-                                            hasSlotByName(
-                                                `body-cell-${col.name}`
-                                            )
-                                                ? `body-cell-${col.name}`
-                                                : 'body-cell'
-                                        "
-                                    >
-                                        {{ getCellValue(col, props.item) }}
-                                    </slot>
-                                </DlTd>
-                                <DlTd
-                                    v-if="showRowActions"
-                                    key="visibleColumnsSlot"
-                                    class="visible-columns-justify-end dl-table-visible-column"
-                                    no-tooltip
-                                >
-                                    <slot
-                                        v-bind="
-                                            getBodyCellScope({
-                                                key: getRowKey(props.item),
-                                                row: props.item,
-                                                pageIndex: props.pageIndex
-                                            })
-                                        "
-                                        :name="
-                                            hasSlotByName(
-                                                `body-cell-row-actions`
-                                            )
-                                                ? `body-cell-row-actions`
-                                                : 'body-cell'
-                                        "
-                                    >
-                                        <div style="width: 15px"></div>
-                                    </slot>
-                                </DlTd>
-                            </DlTr>
-                            <tr
-                                v-if="isRowExpanded(props.item)"
-                                :key="getRowExpandedKey(props.item)"
-                                class="dl-virtual-scroll--with-prev"
-                            >
-                                <td :colspan="colspanWithExpandableRow">
-                                    <slot
-                                        v-bind="{ row: props.item }"
-                                        name="body-cell-expandable-content"
-                                    >
-                                        <div class="expanded-row">
-                                            {{ emptyExpandableMessage }}
-                                        </div>
-                                    </slot>
-                                </td>
-                            </tr>
+                                    <td :colspan="colspanWithExpandableRow">
+                                        <slot
+                                            v-bind="{ row: props.item }"
+                                            name="body-cell-expandable-content"
+                                        >
+                                            <div class="expanded-row">
+                                                {{ emptyExpandableMessage }}
+                                            </div>
+                                        </slot>
+                                    </td>
+                                </tr>
+                            </template>
                         </slot>
                     </template>
                     <DlTr v-if="isDataEmpty">
@@ -461,13 +662,6 @@
                     >
                         <DlTr>
                             <th
-                                v-if="isTreeTable"
-                                class="dl-table--col-auto-width empty-col"
-                                :data-resizable="false"
-                                style="width: 25px"
-                                @mousedown="stopAndPrevent"
-                            />
-                            <th
                                 v-if="hasDraggableRows && !isTreeTable"
                                 class="dl-table--col-auto-width dl-table__drag-icon"
                                 style="width: 25px"
@@ -500,7 +694,7 @@
                             </th>
 
                             <th
-                                v-if="expandableRows"
+                                v-if="expandableRows && !isTreeTable"
                                 style="width: 26px"
                                 class="dl-table--col-auto-width dl-table--col-icon-wrapper"
                             />
@@ -665,6 +859,8 @@
                         style="position: relative; z-index: 90"
                         :is-sortable="hasDraggableRows"
                         :options="sortableOptions"
+                        @start="onSortableStart"
+                        @change="onSortableChange"
                         @end="handleSortableEvent"
                     >
                         <slot name="top-row" :cols="computedCols" />
@@ -1245,6 +1441,22 @@ export default defineComponent({
         /**
          * Props for the empty state component
          */
+        customIconExpandedRow: {
+            type: String,
+            default: ''
+        },
+        customIconCompressedRow: {
+            type: String,
+            default: ''
+        },
+        chevronIconColor: {
+            type: String,
+            default: ''
+        },
+        treeSortableHandlers: {
+            type: Object as PropType<Record<string, (...args: any[]) => any>>,
+            default: null
+        },
         emptyStateProps: {
             type: Object as PropType<DlEmptyStateProps>,
             default: () =>
@@ -2040,7 +2252,22 @@ export default defineComponent({
             () => !!slots['header-selection']
         )
 
+        const treeRow = (item: any) => item?.__source ?? item
+
+        const onSortableStart = (event: SortableEvent) =>
+            props.treeSortableHandlers?.start?.(event)
+
+        const onSortableChange = (event: SortableEvent) =>
+            props.treeSortableHandlers?.change?.(event)
+
         const handleSortableEvent = (event: SortableEvent) => {
+            if (props.treeSortableHandlers?.end) {
+                props.treeSortableHandlers.end(event)
+                nextTick(() => {
+                    tbodyKey.value = v4()
+                })
+                return
+            }
             const { oldIndex, newIndex } = event
             const newRows = insertAtIndex(rows.value, oldIndex, newIndex)
             emit('row-reorder', newRows)
@@ -2099,7 +2326,11 @@ export default defineComponent({
             ghostClass: 'dl-table-ghost-row',
             invertSwap: true,
             swapThreshold: 0.5,
-            handle: '.draggable-icon'
+            handle: '.draggable-icon',
+            onMove: (event: any) =>
+                props.treeSortableHandlers?.move
+                    ? props.treeSortableHandlers.move(event)
+                    : true
         }
 
         const virtualScrollClasses = computed(() => {
@@ -2153,6 +2384,9 @@ export default defineComponent({
             containerStyle,
             isDataEmpty,
             handleSortableEvent,
+            treeRow,
+            onSortableStart,
+            onSortableChange,
             tbodyKey,
             tableKey,
             uuid: tableUuid,
@@ -2235,6 +2469,36 @@ export default defineComponent({
 
 <style scoped lang="scss">
 @import './styles/dl-table-styles.scss';
+
+.chevron-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 5px;
+    height: 100%;
+
+    &.no-children {
+        cursor: default;
+    }
+}
+
+.chevron-icon-container {
+    cursor: pointer;
+    width: 25px;
+
+    &.no-children {
+        cursor: default;
+    }
+}
+
+.dl-draggable-container {
+    width: 25px;
+}
+
+.nested-element {
+    width: 100%;
+}
 
 table {
     width: 100%;

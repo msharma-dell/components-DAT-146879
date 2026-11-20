@@ -12,7 +12,11 @@ export function moveNestedRow(
     event: SortableEvent,
     sortingMovement: SortingMovement
 ) {
-    const sourceId = event.item.querySelector('tr').dataset.id
+    const sourceId = (
+        event.item.tagName === 'TR'
+            ? event.item
+            : event.item.querySelector('tr')
+    ).dataset.id
     const { lastId, direction } = sortingMovement
     return moveItem(rows, sourceId, lastId, direction)
 }
